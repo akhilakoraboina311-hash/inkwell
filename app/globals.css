@@ -1,0 +1,36 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import 'shadcn/tailwind.css';
+
+@custom-variant dark (&:is(.dark *));
+
+:root { color-scheme: light; }
+.dark { color-scheme: dark; }
+
+@layer base {
+  * { @apply border-border outline-ring/50; }
+  html { font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+  body { @apply bg-background text-foreground antialiased; }
+  button, input, textarea, select { font: inherit; }
+}
+
+@keyframes float-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+main { animation: float-in .35s ease-out both; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
+
+.dark input, .dark textarea, .dark select { color: #f8fafc; }
+.dark select option { background: #0f172a; }
+::selection { background: #c7d2fe; color: #312e81; }
+
+@theme inline {
+  --color-background: oklch(0.985 0.003 247);
+  --color-foreground: oklch(0.21 0.03 264);
+  --color-border: oklch(0.91 0.02 264);
+  --color-ring: oklch(0.58 0.22 277);
+}
+@media (prefers-color-scheme: dark) { :root:not(.light) { color-scheme: dark; } }
+
+/* Keep the app comfortably usable on very narrow screens. */
+@media (max-width: 380px) { h1 { font-size: 1.7rem !important; } }
+
