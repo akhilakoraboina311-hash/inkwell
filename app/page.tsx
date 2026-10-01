@@ -12,6 +12,7 @@ import {
   Home,
   LogIn,
   LogOut,
+  Mail,
   Moon,
   Plus,
   RefreshCw,
@@ -76,6 +77,26 @@ const initialStarterHistory: HistoryItem[] = [
 function inferRecipient(draft: string) {
   const match = draft.match(/^(?:hi|hello|hey|dear)\s+([^,!\n]+)/i)
   return match?.[1]?.trim() || 'there'
+}
+
+function inferRecipientEmail(draft: string) {
+  const match = draft.match(/\b([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,})\b/)
+  return match?.[1] || ''
+}
+
+function parseEmailSubjectAndBody(text: string) {
+  if (!text) return { subject: '', body: '' }
+  const subjectMatch = text.match(/^Subject:\s*(.*)/im)
+  if (subjectMatch) {
+    const subject = subjectMatch[1].trim()
+    const body = text.replace(/^Subject:\s*.*\n*/im, '').trim()
+    return { subject, body }
+  }
+  const lines = text.trim().split('\n')
+  if (lines.length > 1 && lines[0].length < 80 && !lines[0].toLowerCase().startsWith('hi') && !lines[0].toLowerCase().startsWith('dear')) {
+    return { subject: lines[0].replace(/^[#*\s]+/, '').trim(), body: lines.slice(1).join('\n').trim() }
+  }
+  return { subject: 'Meeting Update', body: text.trim() }
 }
 
 function cleanBody(draft: string) {
@@ -200,6 +221,8 @@ export default function Page() {
   )
   const [tone, setTone] = useState('Professional')
   const [result, setResult] = useState(initialStarterHistory[0].result)
+  const [recipientEmail, setRecipientEmail] = useState('')
+  const [subject, setSubject] = useState('Proposal Follow-up')
   const [history, setHistory] = useState<HistoryItem[]>(initialStarterHistory)
   const [templates, setTemplates] = useState<[string, string][]>(fallbackTemplates)
   const [currentGenerationId, setCurrentGenerationId] = useState<string | null>(null)
@@ -484,7 +507,15 @@ export default function Page() {
         polished = mockRes.polished_email
       }
 
+      const parsed = parseEmailSubjectAndBody(polished)
       setResult(polished)
+      if (parsed.subject) {
+        setSubject(parsed.subject)
+      }
+      const detectedEmail = inferRecipientEmail(draft)
+      if (detectedEmail && !recipientEmail) {
+        setRecipientEmail(detectedEmail)
+      }
 
       let generationId: string | number = Date.now()
 
@@ -492,8 +523,8 @@ export default function Page() {
       if (user && !isGuest) {
         const words = draft.trim().split(/\s+/).length
         const chars = draft.length
-        const recipient = inferRecipient(draft)
-        const subject = polished.match(/^Subject:\s*(.*)/m)?.[1]?.trim() || 'Email draft'
+        const recipient = recipientEmail || inferRecipient(draft)
+        const finalSubject = (subject || parsed.subject || 'Email draft').trim()
 
         const { data: savedGen, error: dbErr } = await supabase
           .from('email_generations')
@@ -502,7 +533,7 @@ export default function Page() {
             draft,
             tone,
             result: polished,
-            subject,
+            subject: finalSubject,
             recipient,
             word_count: words,
             char_count: chars,
@@ -747,6 +778,10 @@ export default function Page() {
             tone={tone}
             setTone={setTone}
             result={result}
+            subject={subject}
+            setSubject={setSubject}
+            recipientEmail={recipientEmail}
+            setRecipientEmail={setRecipientEmail}
             polish={polish}
             polishing={polishing}
             copy={copy}
@@ -766,6 +801,7 @@ export default function Page() {
             setDraft={setDraft}
             setTone={setTone}
             setResult={setResult}
+            setSubject={setSubject}
             setRoute={setRoute}
             onDelete={deleteHistoryItem}
           />
@@ -994,6 +1030,10 @@ function HomeView({
   tone,
   setTone,
   result,
+  subject,
+  setSubject,
+  recipientEmail,
+  setRecipientEmail,
   polish,
   polishing,
   copy,
@@ -1013,6 +1053,64 @@ function HomeView({
     day: 'numeric',
     year: 'numeric',
   }).format(new Date())
+
+  // Parse subject and body from the generated result
+  const { subject: extractedSubject, body: extractedBody } = useMemo(() => {
+    return parseEmailSubjectAndBody(result)
+  }, [result])
+
+  const currentSubject = subject || extractedSubject
+  const displayedBody = extractedBody || result
+
+  const handleCopy = async () => {
+    try {
+      const finalSubject = currentSubject.trim()
+      const finalBody = (displayedBody || result || '').trim()
+      const textToCopy = finalSubject ? `Subject: ${finalSubject}\n\n${finalBody}` : finalBody
+      await navigator.clipboard.writeText(textToCopy)
+    } catch {}
+    if (copy) copy()
+  }
+
+  const handleOpenInGmail = () => {
+    if (!result || !result.trim()) {
+      notify('Please polish an email first.')
+      return
+    }
+
+    if (!recipientEmail || !recipientEmail.trim()) {
+      notify('Please enter a recipient email address.')
+      return
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+    if (!emailRegex.test(recipientEmail.trim())) {
+      notify('Please enter a valid email address.')
+      return
+    }
+
+    const finalSubject = currentSubject.trim()
+    if (!finalSubject) {
+      notify('Email subject is missing.')
+      return
+    }
+
+    const finalBody = (displayedBody || result || '').trim()
+    if (!finalBody) {
+      notify('Email body is missing.')
+      return
+    }
+
+    const gmailComposeUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(
+      recipientEmail.trim()
+    )}&su=${encodeURIComponent(finalSubject)}&body=${encodeURIComponent(finalBody)}`
+
+    notify('Opening Gmail...')
+    window.open(gmailComposeUrl, '_blank', 'noopener,noreferrer')
+    window.setTimeout(() => {
+      notify('Gmail opened — review and click Send.')
+    }, 600)
+  }
 
   return (
     <>
@@ -1126,15 +1224,56 @@ function HomeView({
             </span>
           </div>
 
-          <div className="min-h-[280px] whitespace-pre-wrap rounded-2xl bg-gradient-to-br from-rose-50 to-amber-50 p-5 text-[15px] leading-7 text-stone-700 dark:from-rose-950/20 dark:to-amber-950/20 dark:text-stone-200">
-            {result || (
-              <span className="text-stone-400 italic">Your refined email will appear here once polished.</span>
-            )}
+          {/* Recipient Email & Subject Fields */}
+          <div className="mb-4 grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-stone-500 dark:text-stone-400">
+                Recipient Email
+              </label>
+              <input
+                type="email"
+                value={recipientEmail}
+                onChange={(e) => setRecipientEmail(e.target.value)}
+                placeholder="example@gmail.com"
+                className="w-full rounded-xl border border-stone-200 bg-[#fffbf5] px-3.5 py-2.5 text-sm text-stone-900 outline-none transition focus:border-rose-400 focus:ring-2 focus:ring-rose-100 dark:border-white/10 dark:bg-white/5 dark:text-white dark:focus:ring-rose-950/40"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-stone-500 dark:text-stone-400">
+                Subject
+              </label>
+              <input
+                type="text"
+                value={currentSubject}
+                onChange={(e) => setSubject(e.target.value)}
+                placeholder="Meeting Update"
+                className="w-full rounded-xl border border-stone-200 bg-[#fffbf5] px-3.5 py-2.5 text-sm font-medium text-stone-900 outline-none transition focus:border-rose-400 focus:ring-2 focus:ring-rose-100 dark:border-white/10 dark:bg-white/5 dark:text-white dark:focus:ring-rose-950/40"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-stone-500 dark:text-stone-400">
+              Polished Message
+            </label>
+            <div className="min-h-[220px] whitespace-pre-wrap rounded-2xl bg-gradient-to-br from-rose-50 to-amber-50 p-5 text-[15px] leading-7 text-stone-700 dark:from-rose-950/20 dark:to-amber-950/20 dark:text-stone-200">
+              {displayedBody || (
+                <span className="text-stone-400 italic">Your refined email will appear here once polished.</span>
+              )}
+            </div>
           </div>
 
           <div className="mt-5 flex flex-wrap items-center gap-2">
-            <Button variant="soft" onClick={copy} disabled={!result}>
-              {copied ? <Check size={16} /> : <Copy size={16} />} {copied ? 'Copied!' : 'Copy to clipboard'}
+            <Button variant="soft" onClick={handleCopy} disabled={!result}>
+              {copied ? <Check size={16} /> : <Copy size={16} />} {copied ? 'Copied!' : 'Copy'}
+            </Button>
+            <Button
+              variant="primary"
+              onClick={handleOpenInGmail}
+              disabled={!result}
+              className="bg-gradient-to-r from-red-500 via-rose-500 to-amber-500 text-white shadow-lg shadow-rose-200 transition hover:from-red-600 hover:to-amber-600"
+            >
+              <Mail size={16} /> Open in Gmail
             </Button>
             <Button variant="outline" onClick={polish} disabled={polishing || !draft.trim()}>
               <RefreshCw size={16} className={polishing ? 'animate-spin' : ''} /> Regenerate
@@ -1237,7 +1376,7 @@ function Dashboard({ history }: { history: HistoryItem[] }) {
   )
 }
 
-function HistoryView({ history, setDraft, setTone, setResult, setRoute, onDelete }: any) {
+function HistoryView({ history, setDraft, setTone, setResult, setSubject, setRoute, onDelete }: any) {
   return (
     <>
       <div className="flex items-center justify-between">
@@ -1284,6 +1423,8 @@ function HistoryView({ history, setDraft, setTone, setResult, setRoute, onDelete
                   setDraft(item.draft)
                   setTone(item.tone)
                   setResult(item.result)
+                  const parsed = parseEmailSubjectAndBody(item.result)
+                  if (parsed.subject && setSubject) setSubject(parsed.subject)
                   setRoute('home')
                 }}
               >
